@@ -58,6 +58,8 @@ namespace tiny{
             std::vector<Value> values_;
             std::map<std::string, Value> key_values_;
         public: // 初始化
+            Json(){}
+            Json(std::string str){parse(str);}
             Json(int errCode, std::string errReason) : type_('!'), errCode_(errCode), errReason_(errReason){}
             Json(std::vector<Value> values): type_('v'), values_(values){}
             Json(std::map<std::string, Value> key_values): type_('k'), key_values_(key_values){}
@@ -75,6 +77,8 @@ namespace tiny{
                 type_ = '_'; 
                 values_.clear(); 
                 key_values_.clear(); 
+                errCode_ = 0;
+                errReason_.clear();
             }
             void addToSelf(Json *js){
                      if(type_ == 'k' && js -> getType() == 'k') return (key_values_.insert(js -> getKeyValues().begin(), js -> getKeyValues().end()));
@@ -130,20 +134,87 @@ namespace tiny{
                 v.push_back(Value(js));
                 return v;
             }
-            std::string allQuotToDouble(std::string str){
-                replace(str.begin(), str.end(), '\'', '"');
-                return str;
-            }
-            std::string jsonFormat(std::string &str){
+            std::string jsonFormat(std::string &str){ // 去除" "(双引号)之外的空格与换行
                 std::string ss;
                 int flag = 1;
                 for(auto i : str){
                     if(i == '"') flag *= -1;
                     if(flag == -1) ss += i;
-                    else { if(i != ' ' && i != '\n' && i != '\t') ss += i };
+                    else if (i != ' ' && i != '\n' && i != '\t') ss += i; 
                 } 
                 return ss;
             }
+            std::string Trims(std::string s, char lc, char rc){ // 取lc和rc两个字符之间的字符串(从两端开始找)
+                std::string ss = s;
+                if (s.find(lc) != std::string::npos && s.find(rc) != std::string::npos) {
+                    size_t b = s.find_first_of(lc);
+                    size_t e = s.find_last_of(rc);
+                    ss = s.substr(b + 1, e - b - 1);
+                }
+                return ss;
+            }
+            std::string FetchStrStr(std::string inputstr, int &offset){
+                int tokencount = 0;
+                std::string objstr;
+                bool hasFound = false;
+                size_t i = 0;
+                for (; i < inputstr.size(); i++) {
+                    char c = inputstr[i];
+                    if (!hasFound && c == '"') hasFound = true;
+                    else if(hasFound && c == '"') break;
+                    else if (hasFound) objstr.push_back(c);
+                }
+                offset = i + 1;
+                return objstr;
+            }
+
+            std::string FetchNumStr( std::string inputstr, int& offset ){
+                    std::string objstr;
+                    size_t i = 0;
+                    bool hasFound = false;
+                    for(; i < inputstr.size(); ++i){
+                        if((inputstr[i] > '0' && inputstr[i] < '9') || inputstr[i] == '+' || inputstr[i] == '-'){
+                            objstr.push_back(inputstr[i]);
+                            hasFound = true;
+                        }else{
+                            if(hasFound)
+                                break;
+                        }
+                    }
+                    offset = i;
+                    return objstr;
+            }
+
+            std::string FetchArrayStr(std::string inputstr, int& offset, bool hasKey = 0){
+                char lc = hasKey ? '{' : '[';
+                char rc = hasKey ? '}' : ']';
+                size_t i = 0;
+                std::string objstr;
+                int tokencount = 0;
+                bool hasFound = false;
+                for (; i < inputstr.size(); i++) {
+                    char c = inputstr[i];
+                    if (c == lc) {
+                        hasFound = true;
+                        tokencount++;
+                    }
+                    else if (c == rc) tokencount--;
+                    if(tokencount == 0 && hasFound == true) break;
+                    if (hasFound == true) objstr.push_back(c);
+                }
+                offset = i + 1;
+                return objstr.substr(1);
+            }
+            std::string getFirstStr(std::string &str, int &offset){
+                std::string temp = "";
+                if(str[0] == '"')       temp += ("s" + FetchStrStr(str, offset));
+                else if (str[0] == '[') temp += ("v" + FetchArrayStr(str, offset, 0));
+                else if (str[0] == '{') temp += ("k" + FetchArrayStr(str, offset, 1));
+                else                    temp += ("n" + FetchNumStr(str, offset));
+                if(!str.empty())        str = str.substr(offset + 1);
+                return temp;
+            }
+
         public: // 插入一个 value 或者一个 key-value 对
             void insert(std::string key, std::string str){ key_values_.insert(std::pair<std::string, Value>(key, Value(str))); }
             void insert(std::string key, int num){ key_values_.insert(std::pair<std::string, Value>(key, Value(num))); }
@@ -307,7 +378,60 @@ namespace tiny{
     void Json::parse(std::string str){
         clear();
         str = jsonFormat(str);
+        if(str[0] == '{'){
+            type_ = 'k';
+            str = Trims(str, '{', '}');
+            int offset;
+            str += "  ";
+            std::string temp, temp2;
+            while(str[0] == '"'){
+                temp = getFirstStr(str, offset).substr(1);
+                temp2 = getFirstStr(str, offset);
+                if (temp2[0] == 'n') key_values_.insert({temp, Value(std::stoi(temp2.substr(1)))});
+                else if (temp2[0] == 's') key_values_.insert({temp, Value(temp2.substr(1))});
+                else if (temp2[0] == 'k') {
+                    Json j = new Json();
+                    j.parse("{" + temp2.substr(1) + "}");
+                    key_values_.insert({temp, Value(j)});
+                }
+                else if (temp2[0] == 'v') {
+                    Json j = new Json();
+                    j.parse("[" + temp2.substr(1) + "]");
+                    key_values_.insert({temp, Value(j)});
+                }
+            }
 
-
+        }
+        else if(str[0] == '['){
+            type_ = 'v';
+            str = Trims(str, '[', ']');
+            int offset;
+            str += "  ";
+            std::string temp;
+            while(str[0] == '"' || str[0] == '{' || str[0] == '[' || (str[0] > '0' && str[0] < '9')){
+                temp = getFirstStr(str, offset);
+                if (temp[0] == 'n') values_.push_back( Value(std::stoi(temp.substr(1))) );
+                else if (temp[0] == 's') values_.push_back( Value(temp.substr(1)));
+                else if (temp[0] == 'k') {
+                    Json j = new Json();
+                    j.parse("{" + temp.substr(1) + "}");
+                    values_.push_back( Value(j) );
+                }
+                else if (temp[0] == 'v') {
+                    Json j = new Json();
+                    j.parse("[" + temp.substr(1) + "]");
+                    values_.push_back( Value(j) );         
+                }       
+            }
+        }    
     }
+
+
+    std::string allQuotToDouble(std::string str){ // 替换: ' -> " 
+        replace(str.begin(), str.end(), '\'', '"');
+        return str;
+    }
+
+
+
 }
